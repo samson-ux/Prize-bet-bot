@@ -1,0 +1,106 @@
+{
+  "discord": {
+    "token": "YOUR_DISCORD_BOT_TOKEN",
+    "guildId": "YOUR_SERVER_ID"
+  },
+  "deepgram": {
+    "apiKey": "YOUR_DEEPGRAM_API_KEY"
+  },
+  "players": {
+    "Stephen Curry": {
+      "aliases": ["steph", "curry", "chef", "chef curry", "wardell"],
+      "team": "GSW"
+    },
+    "LeBron James": {
+      "aliases": ["lebron", "james", "bron", "king", "king james"],
+      "team": "LAL"
+    },
+    "Klay Thompson": {
+      "aliases": ["klay", "thompson", "klay t"],
+      "team": "DAL"
+    },
+    "Luka Doncic": {
+      "aliases": ["luka", "doncic", "luka d", "wonder boy"],
+      "team": "LAL"
+    },
+    "Jayson Tatum": {
+      "aliases": ["tatum", "jayson", "jt"],
+      "team": "BOS"
+    },
+    "Jaylen Brown": {
+      "aliases": ["jaylen", "brown", "jb"],
+      "team": "BOS"
+    },
+    "Damian Lillard": {
+      "aliases": ["dame", "lillard", "dame time"],
+      "team": "MIL"
+    },
+    "Trae Young": {
+      "aliases": ["trae", "young", "ice trae"],
+      "team": "ATL"
+    },
+    "Donovan Mitchell": {
+      "aliases": ["donovan", "mitchell", "spida"],
+      "team": "CLE"
+    },
+    "Devin Booker": {
+      "aliases": ["booker", "book", "devin"],
+      "team": "PHX"
+    },
+    "Anthony Edwards": {
+      "aliases": ["ant", "edwards", "ant man", "anthony edwards"],
+      "team": "MIN"
+    },
+    "Tyrese Haliburton": {
+      "aliases": ["haliburton", "tyrese", "hali"],
+      "team": "IND"
+    },
+    "De'Aaron Fox": {
+      "aliases": ["fox", "deaaron", "de'aaron"],
+      "team": "SAC"
+    },
+    "Shai Gilgeous-Alexander": {
+      "aliases": ["shai", "sga", "gilgeous"],
+      "team": "OKC"
+    },
+    "Kyrie Irving": {
+      "aliases": ["kyrie", "irving", "kai"],
+      "team": "DAL"
+    },
+    "CJ McCollum": {
+      "aliases": ["cj", "mccollum"],
+      "team": "NOP"
+    },
+    "Fred VanVleet": {
+      "aliases": ["fred", "vanvleet", "fvv", "freddy"],
+      "team": "HOU"
+    },
+    "Buddy Hield": {
+      "aliases": ["buddy", "hield"],
+      "team": "GSW"
+    },
+    "Duncan Robinson": {
+      "aliases": ["duncan", "robinson", "duncan r"],
+      "team": "MIA"
+    },
+    "Desmond Bane": {
+      "aliases": ["bane", "desmond"],
+      "team": "MEM"
+    }
+  },
+  "betting": {
+    "defaultBetSize": 10,
+    "minBetSize": 1,
+    "maxBetSize": 100
+  },
+  "humanization": {
+    "minActionDelay": 200,
+    "maxActionDelay": 800,
+    "minConfirmDelay": 1000,
+    "maxConfirmDelay": 2500,
+    "mouseMovementSteps": 10,
+    "clickOffsetRange": 12,
+    "typingMinDelay": 50,
+    "typingMaxDelay": 150
+  }
+}
