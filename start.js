@@ -20,6 +20,7 @@ const DiscordAudioCapture = require('./src/discord-bot');
 const Transcriber = require('./src/transcriber');
 const TranscriptParser = require('./src/parser');
 const DecisionEngine = require('./src/engine');
+const dashboard = require('./src/dashboard');
 
 const log = createLogger('SETUP');
 
@@ -89,10 +90,15 @@ async function main() {
   // Start idle mouse movements to look human during inactive periods
   betPlacer.startIdleMovement();
 
+  // Start web dashboard
+  dashboard.init({ engine, parser, transcriber });
+  dashboard.start();
+
   log.info('');
   log.info('════════════════════════════════════════════════');
   log.info('  Pipeline active! Listening for 3-pointers...');
   log.info('  Idle mouse movement active in browser.');
+  log.info('  Dashboard: http://localhost:3000');
   log.info('  Press Ctrl+C to stop.');
   log.info('════════════════════════════════════════════════');
   log.info('');

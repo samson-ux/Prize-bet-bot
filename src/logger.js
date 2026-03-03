@@ -1,8 +1,16 @@
 /**
  * Timestamped logger with module tags.
+ * Also emits log events on a shared bus for the dashboard to consume.
+ *
  * Usage: const log = require('./logger')('MODULE_NAME');
  *        log.info('message');
  */
+
+const EventEmitter = require('events');
+
+// Global log bus — dashboard subscribes to this
+const logBus = new EventEmitter();
+logBus.setMaxListeners(50);
 
 function pad(n, width) {
   return String(n).padStart(width, '0');
@@ -22,15 +30,22 @@ function createLogger(module) {
 
   return {
     info(msg) {
-      process.stdout.write(`[${timestamp()}] [${tag}] ${msg}\n`);
+      const line = `[${timestamp()}] [${tag}] ${msg}`;
+      process.stdout.write(line + '\n');
+      logBus.emit('log', { level: 'info', module: tag, msg, line });
     },
     warn(msg) {
-      process.stdout.write(`[${timestamp()}] [${tag}] ⚠ ${msg}\n`);
+      const line = `[${timestamp()}] [${tag}] ⚠ ${msg}`;
+      process.stdout.write(line + '\n');
+      logBus.emit('log', { level: 'warn', module: tag, msg, line });
     },
     error(msg) {
-      process.stderr.write(`[${timestamp()}] [${tag}] ERROR: ${msg}\n`);
+      const line = `[${timestamp()}] [${tag}] ERROR: ${msg}`;
+      process.stderr.write(line + '\n');
+      logBus.emit('log', { level: 'error', module: tag, msg, line });
     },
   };
 }
 
+createLogger.logBus = logBus;
 module.exports = createLogger;
