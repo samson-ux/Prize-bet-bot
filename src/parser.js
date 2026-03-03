@@ -1,15 +1,21 @@
 /**
  * Transcript parser — detects made/missed 3-pointers from voice callouts.
  *
+ * DYNAMIC MATCHING: Does NOT require a pre-set player list.
+ * Extracts whatever name appears before "for three" and passes it through.
+ * Config aliases are used as a bonus normalization layer (e.g., "steph" → "Stephen Curry")
+ * but unknown names are passed through as-is for the scraper to match on PrizePicks.
+ *
  * CRITICAL: This module must be extremely conservative. A false positive
  * (thinking a 3 was made when it was missed) costs real money. When in
  * doubt, do NOT emit a "made" event.
  *
  * Flow:
- *   1. Detect shot attempt: "[Player] for three / for 3"
- *   2. Wait for result within a time window
- *   3. Result must be a CONFIRMED "made" phrase — not just absence of "miss"
- *   4. If ambiguous or timed out → skip (do not bet)
+ *   1. Detect shot attempt: "[anything] for three / for 3"
+ *   2. Extract the name-like words before the trigger
+ *   3. Wait for result within a time window
+ *   4. Result must be a CONFIRMED "made" phrase — not just absence of "miss"
+ *   5. If ambiguous or timed out → skip (do not bet)
  */
 
 const EventEmitter = require('events');
@@ -25,7 +31,7 @@ const MADE_PHRASES = [
   // Direct confirmations
   'good', 'its good', "it's good", 'that is good', "that's good",
   'got it', 'he got it', "he's got it",
-  'in', 'its in', "it's in", 'went in', 'goes in', 'going in',
+  'its in', "it's in", 'went in', 'goes in', 'going in',
   'made it', 'he made it', 'made that', 'he made that',
   'bang', 'bang bang',
   'splash', 'splashed it', 'splashed that',
@@ -42,7 +48,6 @@ const MADE_PHRASES = [
   'count it', 'count that',
   'thats a three', "that's a three", 'thats a 3', "that's a 3",
   'there it is', 'there you go',
-  'from deep', 'from downtown',
   'bingo',
   'boom',
   'lets go', "let's go",
@@ -50,10 +55,12 @@ const MADE_PHRASES = [
   'wet', 'thats wet', "that's wet",
   'clean', 'thats clean', "that's clean",
   'automatic',
-  'right on',
   'oh yeah',
-  'nice',
 ];
+
+// NOTE: Removed short/ambiguous single words that could false-positive:
+//   'in' (too common), 'nice' (too generic), 'right on' (conversational),
+//   'from deep'/'from downtown' (these are shot descriptions, not results)
 
 // ─── MISSED PHRASES ─────────────────────────────────────────────────────────
 // Every known way a spotter might indicate a missed 3-pointer.
@@ -63,10 +70,10 @@ const MISSED_PHRASES = [
   'no good', 'no good on that',
   'miss', 'missed', 'missed it', 'missed that', 'he missed', 'he missed it',
   'short', 'came up short', 'too short',
-  'off', 'off the rim', 'off the back', 'off the front', 'off the iron',
+  'off the rim', 'off the back', 'off the front', 'off the iron',
   'brick', 'bricked', 'bricked it', 'bricked that',
-  'out', 'bounced out', 'rimmed out', 'rims out',
-  'no', 'nah', 'nope', 'nuh uh',
+  'bounced out', 'rimmed out', 'rims out',
+  'nah', 'nope', 'nuh uh',
   'not good', 'not in',
   'didnt go', "didn't go", 'didnt go in', "didn't go in",
   'didnt make', "didn't make", 'didnt make it', "didn't make it",
@@ -81,14 +88,17 @@ const MISSED_PHRASES = [
   'bounces off', 'bounced off',
   'in and out',
   'so close', 'almost', 'just missed',
-  'tough', 'tough miss',
-  'long', 'too long',
-  'left', 'too far left',
-  'right', 'too far right',
-  'wide', 'wide open miss',
+  'tough miss',
+  'too long',
+  'too far left', 'too far right',
+  'wide open miss',
   'not this time',
-  'ugh', 'damn', 'dammit',
 ];
+
+// NOTE: Removed short/ambiguous words that could false-positive:
+//   'no' (too common in speech), 'off' (too common), 'out' (too common),
+//   'tough' (could be "tough shot"), 'long'/'left'/'right'/'wide' (directional),
+//   'ugh'/'damn'/'dammit' (emotional, not always about a miss)
 
 // ─── NEGATION PREFIXES ──────────────────────────────────────────────────────
 // If a "made" phrase is preceded by a negation, treat it as a miss.
@@ -111,35 +121,43 @@ const THREE_TRIGGERS = [
   'lets it fly', 'lets it go from three',
 ];
 
+// ─── NOISE WORDS ────────────────────────────────────────────────────────────
+// Words to strip when extracting a player name from text before the trigger.
+const NOISE_WORDS = new Set([
+  'and', 'the', 'a', 'an', 'he', 'she', 'his', 'her', 'now',
+  'then', 'here', 'goes', 'with', 'pulls', 'up', 'shoots',
+  'takes', 'fires', 'launches', 'oh', 'wow', 'look', 'at',
+  'its', "it's", 'is', 'has', 'got', 'just', 'like', 'so',
+  'man', 'dude', 'bro', 'yo', 'hey', 'ok', 'okay', 'um', 'uh',
+]);
+
 // ─── PARSER CLASS ───────────────────────────────────────────────────────────
 
 class TranscriptParser extends EventEmitter {
   /**
-   * @param {Object} playersConfig - players map from config.json
+   * @param {Object} playersConfig - players map from config.json (optional bonus aliases)
    * @param {Object} options
    * @param {number} options.resultWindowMs - how long to wait for result after shot (default 4000ms)
    * @param {number} options.bufferMaxLength - max chars in rolling buffer (default 500)
    */
-  constructor(playersConfig, options = {}) {
+  constructor(playersConfig = {}, options = {}) {
     super();
     this.resultWindowMs = options.resultWindowMs || 4000;
     this.bufferMaxLength = options.bufferMaxLength || 500;
 
-    // Build player lookup: alias → canonical name
+    // Build optional alias lookup: alias → canonical name
+    // This is a BONUS layer — if "steph" is in config, we normalize to "Stephen Curry"
+    // But unknown names pass through as-is
     this.playerAliases = new Map();
-    this.playerNames = [];
 
     for (const [canonical, data] of Object.entries(playersConfig)) {
-      this.playerNames.push(canonical);
-      // Add the full name and its parts
       this.playerAliases.set(canonical.toLowerCase(), canonical);
       const parts = canonical.toLowerCase().split(' ');
       for (const part of parts) {
-        if (part.length > 2) { // skip short words like "de"
+        if (part.length > 2) {
           this.playerAliases.set(part, canonical);
         }
       }
-      // Add configured aliases
       if (data.aliases) {
         for (const alias of data.aliases) {
           this.playerAliases.set(alias.toLowerCase(), canonical);
@@ -181,19 +199,19 @@ class TranscriptParser extends EventEmitter {
 
   /**
    * Look for a 3-point shot attempt in the text.
-   * Pattern: [something that matches a player] + [three-pointer trigger]
+   * DYNAMIC: extracts whatever name-like words appear before the trigger.
+   * No pre-set player list required.
    */
   _checkForShot(text) {
-    // Check the buffer for trigger phrases
     const searchText = this.buffer.slice(-200); // last ~200 chars
 
     for (const trigger of THREE_TRIGGERS) {
       const triggerIdx = searchText.lastIndexOf(trigger);
       if (triggerIdx === -1) continue;
 
-      // Look for a player name in the text BEFORE the trigger
-      const beforeTrigger = searchText.slice(Math.max(0, triggerIdx - 80), triggerIdx);
-      const player = this._findPlayer(beforeTrigger);
+      // Extract the text BEFORE the trigger phrase
+      const beforeTrigger = searchText.slice(Math.max(0, triggerIdx - 80), triggerIdx).trim();
+      const player = this._extractPlayerName(beforeTrigger);
 
       if (player) {
         const now = Date.now();
@@ -229,6 +247,90 @@ class TranscriptParser extends EventEmitter {
   }
 
   /**
+   * Extract a player name from the text before the trigger.
+   *
+   * Strategy:
+   *   1. Check config aliases first (e.g., "steph" → "Stephen Curry")
+   *   2. If no alias match, extract the last 1-3 capitalized/name-like words
+   *      before the trigger and pass them through as the raw name
+   *
+   * This means ANY player can be detected — no config needed.
+   */
+  _extractPlayerName(text) {
+    if (!text || !text.trim()) return null;
+
+    const cleanText = text.trim();
+
+    // ── Step 1: Check config aliases (bonus normalization) ──
+
+    // Multi-word aliases first
+    for (const [alias, canonical] of this.playerAliases) {
+      if (alias.includes(' ') && cleanText.includes(alias)) {
+        return canonical;
+      }
+    }
+
+    // Single-word alias check
+    const words = cleanText.split(/\s+/);
+    for (const word of words) {
+      const clean = word.replace(/[^a-z']/g, '');
+      if (clean.length < 3) continue;
+      if (this.playerAliases.has(clean)) {
+        return this.playerAliases.get(clean);
+      }
+    }
+
+    // Fuzzy alias match (Levenshtein ≤ 2) for words ≥ 4 chars
+    for (const word of words) {
+      const clean = word.replace(/[^a-z]/g, '');
+      if (clean.length < 4) continue;
+
+      let bestMatch = null;
+      let bestDist = 3;
+      for (const [alias, canonical] of this.playerAliases) {
+        if (alias.includes(' ')) continue;
+        const d = distance(clean, alias);
+        if (d < bestDist) {
+          bestDist = d;
+          bestMatch = canonical;
+        }
+      }
+      if (bestMatch) {
+        log.info(`Fuzzy alias match: "${clean}" → ${bestMatch} (distance: ${bestDist})`);
+        return bestMatch;
+      }
+    }
+
+    // ── Step 2: Dynamic extraction — grab the name-like words ──
+    // Take the last 1-3 non-noise words as the player name.
+    // This handles cases like "and curry for three" → "curry"
+    // or "steph curry for three" → "steph curry" (if not in aliases)
+
+    const nameWords = [];
+    // Walk backwards through words, collecting name-like tokens
+    for (let i = words.length - 1; i >= 0 && nameWords.length < 3; i--) {
+      const w = words[i].replace(/[^a-z']/g, '');
+      if (w.length < 2) continue;
+      if (NOISE_WORDS.has(w)) {
+        // If we already have name words, a noise word means we're past the name
+        if (nameWords.length > 0) break;
+        continue;
+      }
+      nameWords.unshift(w);
+    }
+
+    if (nameWords.length === 0) return null;
+
+    // Title-case the extracted name for display
+    const rawName = nameWords
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+
+    log.info(`Dynamic name extracted: "${rawName}" (no config alias match)`);
+    return rawName;
+  }
+
+  /**
    * Check incoming text for a made/missed result.
    * CRITICAL: We require a POSITIVE made confirmation. Absence of miss is NOT enough.
    */
@@ -244,7 +346,6 @@ class TranscriptParser extends EventEmitter {
     // Check for MADE — but verify no negation precedes it
     const madeMatch = this._matchesPhraseWithNegationCheck(searchText);
     if (madeMatch === 'negated') {
-      // A made phrase was found but negated (e.g., "didn't go in") → treat as miss
       this._resolveShot('missed');
       return;
     }
@@ -333,58 +434,6 @@ class TranscriptParser extends EventEmitter {
     this.emit('shot', { player, result });
     this.pendingShot = null;
     this.buffer = '';
-  }
-
-  /**
-   * Find a player name in text using exact alias matching + fuzzy fallback.
-   * Returns canonical player name or null.
-   */
-  _findPlayer(text) {
-    const words = text.trim().split(/\s+/);
-    if (words.length === 0) return null;
-
-    // 1. Try exact alias matches (most reliable)
-    //    Check multi-word aliases first (e.g., "chef curry", "king james")
-    for (const [alias, canonical] of this.playerAliases) {
-      if (alias.includes(' ') && text.includes(alias)) {
-        return canonical;
-      }
-    }
-
-    // Single-word alias matches
-    for (const word of words) {
-      const clean = word.replace(/[^a-z]/g, '');
-      if (clean.length < 3) continue;
-      if (this.playerAliases.has(clean)) {
-        return this.playerAliases.get(clean);
-      }
-    }
-
-    // 2. Fuzzy match as fallback (Levenshtein distance ≤ 2)
-    //    Only for words that are at least 4 chars (avoid false positives on short words)
-    for (const word of words) {
-      const clean = word.replace(/[^a-z]/g, '');
-      if (clean.length < 4) continue;
-
-      let bestMatch = null;
-      let bestDist = 3; // threshold: must be distance ≤ 2
-
-      for (const [alias, canonical] of this.playerAliases) {
-        if (alias.includes(' ')) continue; // skip multi-word for fuzzy
-        const d = distance(clean, alias);
-        if (d < bestDist) {
-          bestDist = d;
-          bestMatch = canonical;
-        }
-      }
-
-      if (bestMatch) {
-        log.info(`Fuzzy matched "${clean}" → ${bestMatch} (distance: ${bestDist})`);
-        return bestMatch;
-      }
-    }
-
-    return null;
   }
 }
 
